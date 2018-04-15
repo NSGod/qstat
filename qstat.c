@@ -197,6 +197,8 @@ int output_bom = 0;
 int xml_display = 0;
 int xml_encoding = ENCODING_LATIN_1;
 
+int plist_display = 0;
+
 #define SUPPORTED_SERVER_SORT		"pgihn"
 #define SUPPORTED_PLAYER_SORT		"PFTNS"
 #define SUPPORTED_SORT_KEYS		"l" SUPPORTED_SERVER_SORT SUPPORTED_PLAYER_SORT
@@ -285,6 +287,8 @@ display_server(struct qserver *server)
 
 	if (raw_display) {
 		raw_display_server(server);
+	} else if (plist_display) {
+		plist_display_server(server);
 	} else if (xml_display) {
 		xml_display_server(server);
 	} else if (json_display) {
@@ -1748,6 +1752,70 @@ xml_display_server(struct qserver *server)
 }
 
 
+void plist_display_server(struct qserver *server) {
+	char *prefix;
+	prefix = server->type->type_prefix;
+	
+	if (server->server_name == DOWN) {
+		if (!up_servers_only) {
+			xform_printf(OF, "\t<key>type</key>\n\t<string>%s</string>\n\t<key>address</key>\n\t<string>%s</string>\n\t<key>status</key>\n\t<string>%s</string>\n", xml_escape(prefix), xml_escape(server->arg), xml_escape(DOWN));
+			xform_printf(OF, "\t<key>hostname</key>\n\t<string>%s</string>\n", xml_escape((hostname_lookup) ? server->host_name : server->arg));
+		}
+		return;
+	}
+	if (server->server_name == TIMEOUT) {
+		if (server->flags & FLAG_BROADCAST && server->n_servers) {
+			xform_printf(OF, "\t<key>type</key>\n\t<string>%s</string>\n\t<key>address</key>\n\t<string>%s</string>\n\t<key>status</key>\n\t<string>%s</string>\n\t<key>servers</key>\n\t<string>%d</string>\n",
+					xml_escape(prefix),
+					xml_escape(server->arg),
+					xml_escape(TIMEOUT),
+					server->n_servers
+					);
+			
+		} else if (!up_servers_only) {
+			xform_printf(OF, "\t<key>type</key>\n\t<string>%s</string>\n\t<key>address</key>\n\t<string>%s</string>\n\t<key>status</key>\n\t<string>%s</string>\n", xml_escape(prefix), xml_escape(server->arg), xml_escape(TIMEOUT));
+			xform_printf(OF, "\t<key>hostname</key>\n\t<string>%s</string>\n", xml_escape((hostname_lookup) ? server->host_name : server->arg));
+		}
+		return;
+	}
+	if (server->error != NULL) {
+		xform_printf(OF, "\t<key>type</key>\n\t<string>%s</string>\n\t<key>address</key>\n\t<string>%s</string>\n\t<key>status</key>\n\t<string>%s</string>\n", xml_escape(prefix), xml_escape(server->arg), "ERROR");
+		xform_printf(OF, "\t<key>hostname</key>\n\t<string>%s</string>\n", xml_escape((hostname_lookup) ? server->host_name : server->arg));
+		xform_printf(OF, "\t<key>error</key>\n\t<string>%s</string>\n", xml_escape(server->error));
+	} else if (server->type->master) {
+		xform_printf(OF, "\t<key>type</key>\n\t<string>%s</string>\n\t<key>address</key>\n\t<string>%s</string>\n\t<key>status</key>\n\t<string>%s</string>\n\t<key>servers</key>\n\t<string>%d</string>\n", xml_escape(prefix), xml_escape(server->arg), "UP", server->n_servers);
+	} else {
+		xform_printf(OF, "\t<key>type</key>\n\t<string>%s</string>\n\t<key>address</key>\n\t<string>%s</string>\n\t<key>status</key>\n\t<string>%s</string>\n", xml_escape(prefix), xml_escape(server->arg), "UP");
+		xform_printf(OF, "\t<key>hostname</key>\n\t<string>%s</string>\n", xml_escape((hostname_lookup) ? server->host_name : server->arg));
+		xform_printf(OF, "\t<key>name</key>\n\t<string>%s</string>\n", xml_escape(xform_name(server->server_name, server)));
+		xform_printf(OF, "\t<key>gametype</key>\n\t<string>%s</string>\n", xml_escape(get_qw_game(server)));
+		xform_printf(OF, "\t<key>map</key>\n\t<string>%s</string>\n", xml_escape(server->map_name));
+		xform_printf(OF, "\t<key>numplayers</key>\n\t<string>%d</string>\n", server->num_players);
+		xform_printf(OF, "\t<key>maxplayers</key>\n\t<string>%d</string>\n", server->max_players);
+		xform_printf(OF, "\t<key>numspectators</key>\n\t<string>%d</string>\n", server->num_spectators);
+		xform_printf(OF, "\t<key>maxspectators</key>\n\t<string>%d</string>\n", server->max_spectators);
+		
+		if (!(server->type->flags & TF_RAW_STYLE_TRIBES)) {
+			xform_printf(OF, "\t<key>ping</key>\n\t<string>%d</string>\n", server->n_requests ? server->ping_total / server->n_requests : 999);
+			xform_printf(OF, "\t<key>retries</key>\n\t<string>%d</string>\n", server->n_retries);
+		}
+		if (server->type->flags & TF_RAW_STYLE_QUAKE) {
+			xform_printf(OF, "\t<key>address</key>\n\t<string>%s</string>\n", xml_escape(server->address));
+			xform_printf(OF, "\t<key>protocolversion</key>\n\t<string>%d</string>\n", server->protocol_version);
+			
+		}
+	}
+	if (!server->type->master && server->error == NULL) {
+		if (get_server_rules) {
+			server->type->display_plist_rule_func(server);
+		}
+		if (get_player_info) {
+			server->type->display_plist_player_func(server);
+		}
+	}
+}
+
+
 void
 xml_header()
 {
@@ -1761,12 +1829,20 @@ xml_header()
 }
 
 
+void plist_header() {
+	xform_printf(OF, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n");
+}
+
+
 void
 xml_footer()
 {
 	xform_printf(OF, "</qstat>\n");
 }
 
+void plist_footer() {
+	xform_printf(OF, "</dict>\n</plist>\n");
+}
 
 void
 xml_display_server_rules(struct qserver *server)
@@ -1782,6 +1858,17 @@ xml_display_server_rules(struct qserver *server)
 	xform_printf(OF, "\t\t</rules>\n");
 }
 
+void plist_display_server_rules(struct qserver *server) {
+	struct rule *rule;
+	rule = server->rules;
+	
+	xform_printf(OF, "\t<key>rules</key>\n\t<dict>\n");
+	
+	for (; rule != NULL; rule = rule->next) {
+		xform_printf(OF, "\t\t<key>%s</key>\n\t\t<string>%s</string>\n", xml_escape(rule->name), xml_escape(rule->value));
+	}
+	xform_printf(OF, "\t</dict>\n");
+}
 
 void
 xml_display_q_player_info(struct qserver *server)
@@ -1811,6 +1898,26 @@ xml_display_q_player_info(struct qserver *server)
 	}
 
 	xform_printf(OF, "\t\t</players>\n");
+}
+
+void plist_display_q_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	xform_printf(OF, "\t</array>\n");
 }
 
 
@@ -1847,6 +1954,25 @@ xml_display_qw_player_info(struct qserver *server)
 	xform_printf(OF, "\t\t</players>\n");
 }
 
+void plist_display_qw_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	xform_printf(OF, "\t</array>\n");
+}
+
 
 void
 xml_display_q2_player_info(struct qserver *server)
@@ -1872,6 +1998,29 @@ xml_display_q2_player_info(struct qserver *server)
 	xform_printf(OF, "\t\t</players>\n");
 }
 
+void plist_display_q2_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		if (server->flags & FLAG_PLAYER_TEAMS) {
+			xform_printf(OF, "\t\t\t<key>team</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->team);
+		}
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	xform_printf(OF, "\t</array>\n");
+}
+
 
 void
 xml_display_player_info_info(struct player *player)
@@ -1883,6 +2032,19 @@ xml_display_player_info_info(struct player *player)
 			char *name = xml_escape(info->name);
 			char *value = xml_escape(info->value);
 			xform_printf(OF, "\t\t\t\t<%s>%s</%s>\n", name, value, name);
+		}
+	}
+}
+
+
+void plist_display_player_info_info(struct player *player) {
+	struct info *info;
+	for (info = player->info; info; info = info->next) {
+		if (info->name) {
+			char *name = xml_escape(info->name);
+			char *value = xml_escape(info->value);
+			xform_printf(OF, "\t\t\t<key>%s</key>\n", name);
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", value);
 		}
 	}
 }
@@ -2514,6 +2676,575 @@ xml_display_tee_player_info(struct qserver *server)
 	}
 
 	xform_printf(OF, "\t\t</players>\n");
+}
+
+/***************************/
+
+void plist_display_unreal_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	//	xform_printf(OF, "\t\t<players>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_halflife_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_fl_player_info(struct qserver *server) {
+	struct player *player;
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_tribes_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_tribes2_player_info(struct qserver *server) {
+	struct player *player;
+	//	char *type;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		if (player->team_name) {
+			xform_printf(OF, "\t\t<dict>\n");
+			xform_printf(OF, "\t\t\t<key>name</key>\n");
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+			xform_printf(OF, "\t\t\t<key>xp</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+			xform_printf(OF, "\t\t\t<key>ping</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+			xform_printf(OF, "\t\t</dict>\n");
+		}
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_bfris_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_descent3_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+		
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_ravenshield_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+
+void plist_display_ghostrecon_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->deaths);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_eye_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+		
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_doom3_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+		
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void
+plist_display_player_info(struct qserver *server)
+{
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for ( ; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		if (NA_INT != player->ping) {
+			xform_printf(OF, "\t\t\t<key>ping</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		}
+		if (NA_INT != player->score) {
+			xform_printf(OF, "\t\t\t<key>score</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		}
+		if (NA_INT != player->deaths) {
+			xform_printf(OF, "\t\t\t<key>deaths</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->deaths);
+		}
+		if (NA_INT != player->frags) {
+			xform_printf(OF, "\t\t\t<key>frags</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		}
+		if (player->team_name) {
+			xform_printf(OF, "\t\t\t<key>team</key>\n");
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(player->team_name));
+		} else if (NA_INT != player->team) {
+			xform_printf(OF, "\t\t\t<key>team</key>\n");
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->team);
+		}
+		
+		if (player->skin) {
+			xform_printf(OF, "\t\t\t<key>skin</key>\n");
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(player->skin));
+		}
+		
+		if (player->connect_time) {
+			xform_printf(OF, "\t\t\t<key>time</key>\n");
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(play_time(player->connect_time, 1)));
+		}
+		
+		if (player->address) {
+			xform_printf(OF, "\t\t\t<key>address</key>\n");
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(player->address));
+		}
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+
+void plist_display_hl2_player_info(struct qserver *server) {
+	// ATM this looks like halflife player info
+	plist_display_halflife_player_info(server);
+}
+
+void plist_display_haze_player_info(struct qserver *server) {
+	// ATM this looks like gs2 player info
+	plist_display_gs2_player_info(server);
+}
+
+void plist_display_gs2_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		if (NA_INT != player->score) {
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		} else if (NA_INT != player->frags) {
+			xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		}
+		
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_armyops_player_info(struct qserver *server) {
+	struct player *player;
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		player->score = calculate_armyops_score(player);
+	}
+	
+	plist_display_gs2_player_info(server);
+}
+
+void plist_display_ts2_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_ts3_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_bfbc2_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_wic_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_tm_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		
+		plist_display_player_info_info(player);
+		
+		xform_printf(OF, "\t\t</dict>\n");
+		
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+
+void plist_display_savage_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_farcry_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->frags);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+		
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void plist_display_tee_player_info(struct qserver *server) {
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for (; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>xp</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->score);
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", 0);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+void
+plist_display_ventrilo_player_info(struct qserver *server)
+{
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for ( ; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		xform_printf(OF, "\t\t\t<key>ping</key>\n");
+		xform_printf(OF, "\t\t\t<integer>%d</integer>\n", player->ping);
+		xform_printf(OF, "\t\t\t<key>team</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(player->team_name));
+		xform_printf(OF, "\t\t\t<key>time</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(play_time(player->connect_time, 2)));
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
+}
+
+
+void
+plist_display_starmade_player_info(struct qserver *server)
+{
+	struct player *player;
+	
+	xform_printf(OF, "\t<key>players</key>\n\t<array>\n");
+	
+	player = server->players;
+	for ( ; player != NULL; player = player->next) {
+		xform_printf(OF, "\t\t<dict>\n");
+		xform_printf(OF, "\t\t\t<key>name</key>\n");
+		xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(xform_name(player->name, server)));
+		
+		if (player->connect_time) {
+			xform_printf(OF, "\t\t\t<key>time</key>\n");
+			xform_printf(OF, "\t\t\t<string>%s</string>\n", xml_escape(play_time(player->connect_time, 2)));
+		}
+		
+		plist_display_player_info_info(player);
+		xform_printf(OF, "\t\t</dict>\n");
+	}
+	
+	xform_printf(OF, "\t</array>\n");
 }
 
 
@@ -3430,6 +4161,9 @@ main(int argc, char *argv[])
 			if (json_display == 1) {
 				usage("cannot specify both -json and -xml\n", argv, NULL);
 			}
+			if (plist_display == 1) {
+				usage("cannot specify both -plist and -xml\n", argv, NULL);
+			}
 		} else if (strcmp(argv[arg], "-json") == 0) {
 			json_display = 1;
 			if (raw_display == 1) {
@@ -3437,6 +4171,22 @@ main(int argc, char *argv[])
 			}
 			if (xml_display == 1) {
 				usage("cannot specify both -xml and -json\n", argv, NULL);
+			}
+			if (plist_display == 1) {
+				usage("cannot specify both -plist and -json\n", argv, NULL);
+			}
+		} else if (strcmp(argv[arg], "-plist") == 0) {
+			plist_display = 1;
+			xml_encoding = ENCODING_UTF_8;
+			xform_names = 0;
+			if (raw_display == 1) {
+				usage("cannot specify both -raw and -plist\n", argv, NULL);
+			}
+			if (xml_display == 1) {
+				usage("cannot specify both -xml and -plist\n", argv, NULL);
+			}
+			if (json_display == 1) {
+				usage("cannot specify both -json and -plist\n", argv, NULL);
 			}
 		} else if (strcmp(argv[arg], "-utf8") == 0) {
 			xml_encoding = ENCODING_UTF_8;
@@ -3765,6 +4515,8 @@ main(int argc, char *argv[])
 		xml_header();
 	} else if (json_display) {
 		json_header();
+	} else if (plist_display) {
+		plist_header();
 	} else if (new_style && !raw_display && !have_server_template()) {
 		display_header();
 	} else if (have_header_template()) {
@@ -3837,6 +4589,8 @@ finish_output()
 		xml_footer();
 	} else if (json_display) {
 		json_footer();
+	} else if (plist_display) {
+		plist_footer();
 	} else if (have_trailer_template()) {
 		template_display_trailer();
 	}
